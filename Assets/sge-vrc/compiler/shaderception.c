@@ -50,6 +50,11 @@ int labelCount = 0;
 
 FILE * f;
 
+char ** compiled;
+int num_compiled_symbols;
+char ** linked;
+int num_linked_symbols;
+
 
 void Emit( const char * command, ... );
 char * Peek( );
@@ -81,6 +86,8 @@ void Term();
 void Block();
 void FuncCall();
 
+void Link();
+void Inline();
 
 
 int numFuncs;
@@ -89,6 +96,156 @@ char *** funcParams;
 int currentFunc;
 int currentParsed;
 int prevParsed;
+
+
+
+
+////////////// TOKEN PARSING /////////////////
+
+int MatchNext( const char * t2 )
+{
+	return MatchTo( 1, t2 );
+}
+
+int MatchTo( int advance, const char * toks )
+{
+	//printf( "TM: %d %d %d // %s %s\n", tokenno, advance, numtoks, tokens[tokenno+advance].text, toks );
+	if( tokenno + advance >= numtoks )
+	{
+		return 0;
+	}
+	else
+	{
+		return strcmp( tokens[tokenno+advance].text, toks ) == 0;
+	}
+}
+
+enum tokentype GetTypeTo( int advance )
+{
+	if( tokenno + advance >= numtoks )
+	{
+		return 0;
+	}
+	else
+	{
+		return tokens[tokenno + advance].type;
+	}
+}
+
+
+int IsAssignment()
+{
+	if( Match( "let" ) || Match( "set" ) ) return 1; // normal assignments
+
+	if( GetType() == TOK_ALPHA )
+	{
+		// Handle swizzle
+		int offset = 1;
+		if( MatchNext( "." ) && GetTypeTo( 2 ) == TOK_ALPHA )
+		{
+			offset += 2;
+		}
+
+		// Assignment types
+		if ( MatchTo( offset, "=" ) && !MatchTo( offset+1, "=" ) ) return 1;
+		if ( MatchTo( offset, "+" ) &&  MatchTo( offset+1, "=" ) ) return 1;
+		if ( MatchTo( offset, "-" ) &&  MatchTo( offset+1, "=" ) ) return 1;
+		if ( MatchTo( offset, "*" ) &&  MatchTo( offset+1, "=" ) ) return 1;
+		if ( MatchTo( offset, "/" ) &&  MatchTo( offset+1, "=" ) ) return 1;
+		if ( MatchTo( offset, "+" ) &&  MatchTo( offset+1, "+" ) ) return 1;
+		if ( MatchTo( offset, "-" ) &&  MatchTo( offset+1, "-" ) ) return 1;
+	}
+	return 0;
+}
+
+
+
+int Match( const char * match )
+{
+	return MatchTo( 0, match );
+}
+
+int Eat( const char * toks )
+{
+	if( !IsAtEnd() && strcmp( tokens[tokenno].text, toks ) == 0 )
+	{
+		tokenno++;
+	}
+	else
+	{
+		char diemsg[1024];
+		sprintf( diemsg, "Could not find correct token (%s not %s)", IsAtEnd()?"EOF":tokens[tokenno].text, toks );
+		DieAtToken( diemsg );
+	}
+}
+
+char * Peek( )
+{
+	if( IsAtEnd() )
+	{
+		return 0;
+	}
+	else
+	{
+		return tokens[tokenno].text;
+	}
+}
+
+char * PeekNext( )
+{
+	if( tokenno + 1 < numtoks )
+	{
+		return tokens[tokenno + 1].text;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+char * EatIdent()
+{
+	if( GetType() != TOK_ALPHA )
+	{
+		DieAtToken( "Expected function call identifier" );
+	}
+	return Advance();
+}
+	
+char * Advance( )
+{
+	char * ret = Peek();
+	tokenno++;
+	return ret;
+}
+
+int IsAtEnd()
+{
+	return tokenno >= numtoks;
+}
+
+enum toktypes GetType()
+{
+	return GetTypeTo( 0 );
+}
+
+void DieAtToken( const char * errmsg )
+{
+	if( IsAtEnd() )
+	{
+		fprintf( stderr, "Error: %s: %s\n", errmsg, filename );
+	}
+	else
+	{
+		fprintf( stderr, "Error: %s (%s)(%d) at %s:%d:%d\n", errmsg, tokens[tokenno].text, tokens[tokenno].type, filename, tokens[tokenno].lineno, tokens[tokenno].charno );
+	}
+	exit( 0 );
+}
+
+
+////////////// FUNCTION SWITCHING /////////////////
+
+
 
 void SwitchToFunction( char * ident, char ** parameters, int numpar )
 {
@@ -112,18 +269,17 @@ void SwitchToGlobal()
 	currentFunc = 0;
 }
 
+///////////////////////// COMPILATION ////////////////////////////
+
 void Emit( const char * command, ... )
 {
 	va_list argp;
 	va_start( argp, command );
 	vprintf( command, argp );
 	putchar( '\n' );
+	compiled = realloc( compiled, sizeof(char*)*(num_compiled_symbols+1) );
+	compiled[num_compiled_symbols++] = strdup( command );
 }
-
-
-
-
-
 
 
 
@@ -200,7 +356,7 @@ void FuncDef()
 	Eat( "fun" );
 	char * ident = EatIdent();
 	Eat( "(" );
-
+printf( "1" );
 	int arity = 0;
 	if( GetType() == TOK_ALPHA ) // has parameters
 	{
@@ -215,21 +371,25 @@ void FuncDef()
 
 	Eat( ")" );
 	Eat( "{" );
+printf( "2" );
 
 	// emit body into correct store
 	SwitchToFunction( ident, parameters, arity );
+printf( "3" );
 
 	// pop parameters from stack in reverse order and put in registers
 	for (int i = 0; i < arity; i++)
 	{
 		Emit( "SETVAR %s", parameters[arity-1-i]);
 	}
+printf( "4" );
 
 	// body
 	Block();
-
+printf( "5" );
 	// restore global store
 	SwitchToGlobal();
+printf( "6" );
 
 	Eat("}");
 }
@@ -520,7 +680,7 @@ void Term()
 		}
 
 		Emit( "PUSHCONST (%f, %f, %f, %f)", res[0], res[1], res[2], res[3] );
-		Emit( "CALL", "swizzle");
+		Emit( "CALL swizzle");
 	}
 }
 
@@ -539,7 +699,6 @@ void Block()
 	if (hasReturn) Advance();
 	// final expression is evaluated
 	Expression();
-printf( "BLOCKEND %s\n", Peek() ); 
 	// optional semicolon for return
 	if (hasReturn) Eat( ";" );
 
@@ -547,148 +706,156 @@ printf( "BLOCKEND %s\n", Peek() );
 }
 
 
+////////// LINKING //////////////////
 
 
-
-
-int MatchNext( const char * t2 )
+void Inline()
 {
-	return MatchTo( 1, t2 );
-}
-
-int MatchTo( int advance, const char * toks )
-{
-	//printf( "TM: %d %d %d // %s %s\n", tokenno, advance, numtoks, tokens[tokenno+advance].text, toks );
-	if( tokenno + advance >= numtoks )
-	{
-		return 0;
-	}
-	else
-	{
-		return strcmp( tokens[tokenno+advance].text, toks ) == 0;
-	}
-}
-
-enum tokentype GetTypeTo( int advance )
-{
-	if( tokenno + advance >= numtoks )
-	{
-		return 0;
-	}
-	else
-	{
-		return tokens[tokenno + advance].type;
-	}
-}
+/*	
+	char ** compiled;
+int num_compiled_symbols;
+char ** linked;
+int num_linked_symbols;
 
 
-int IsAssignment()
-{
-	if( Match( "let" ) || Match( "set" ) ) return 1; // normal assignments
 
-	if( GetType() == TOK_ALPHA )
+	for (int i = 0; i < parsed[id].Length; i += 2)
 	{
-		// Handle swizzle
-		int offset = 1;
-		if( MatchNext( "." ) && GetTypeTo( 2 ) == TOK_ALPHA )
+		if (parsed[id][i] == null) break;
+
+		// User function, inline
+		if (parsed[id][i] == "CALL" && FuncIdentToIndex((string)parsed[id][i+1]) == 0)
 		{
-			offset += 2;
+			for (int j = 0; j < funcIdents.Length; j++) // find body of function to inline
+			{
+				if (funcIdents[j] == null) break;
+
+				if (funcIdents[j].Equals(parsed[id][i+1]))
+				{
+					// store previous renaming table
+					string[] prevRenameFrom = null;
+					if (renameFrom != null)
+					{
+						prevRenameFrom = new string[renameFrom.Length];
+						System.Array.Copy(renameFrom, prevRenameFrom, renameFrom.Length);
+					}
+
+					// setup renaming table
+					renameFrom = funcParams[j];
+					renameTo = new string[renameFrom.Length];
+					for (int k = 0; k < renameTo.Length; k++)
+					{
+						if (renameFrom[k] == null) break;
+						renameTo[k] = "_reg" + regCount++;
+					}
+
+					// recursively inline function
+					Inline(j);
+
+					// restore renaming table
+					renameFrom = prevRenameFrom;
+					break;
+				}
+			}
 		}
-
-		// Assignment types
-		if ( MatchTo( offset, "=" ) && !MatchTo( offset+1, "=" ) ) return 1;
-		if ( MatchTo( offset, "+" ) &&  MatchTo( offset+1, "=" ) ) return 1;
-		if ( MatchTo( offset, "-" ) &&  MatchTo( offset+1, "=" ) ) return 1;
-		if ( MatchTo( offset, "*" ) &&  MatchTo( offset+1, "=" ) ) return 1;
-		if ( MatchTo( offset, "/" ) &&  MatchTo( offset+1, "=" ) ) return 1;
-		if ( MatchTo( offset, "+" ) &&  MatchTo( offset+1, "+" ) ) return 1;
-		if ( MatchTo( offset, "-" ) &&  MatchTo( offset+1, "-" ) ) return 1;
+		else
+		{
+			// Rename variables if a mapping table is available
+			if (parsed[id][i] == "PUSHVAR" || parsed[id][i] == "SETVAR")
+			{
+				string ident = (string)parsed[id][i+1];
+				if (renameFrom != null)
+				{
+					for (int j = 0; j < renameFrom.Length; j++)
+					{
+						if (ident == renameFrom[j])
+						{
+							parsed[id][i+1] = renameTo[j];
+							break;
+						}
+					}
+				}
+			}
+			// Dont add labels
+			if (parsed[id][i] == "LABEL")
+			{
+				labels[currentLabels++] = parsed[id][i+1];
+				labels[currentLabels++] = currentLinked;
+			}
+			else
+			{
+				linked[currentLinked++] = parsed[id][i];
+				linked[currentLinked++] = parsed[id][i+1];
+			}
+		}
 	}
-	return 0;
+	*/
 }
 
-
-
-int Match( const char * match )
+void Link()
 {
-	return MatchTo( 0, match );
-}
+	/*
+	renameFrom = null;
+	renameTo = null;
 
-int Eat( const char * toks )
-{
-	if( !IsAtEnd() && strcmp( tokens[tokenno].text, toks ) == 0 )
-	{
-		tokenno++;
-	}
-	else
-	{
-		char diemsg[1024];
-		sprintf( diemsg, "Could not find correct token (%s not %s)", IsAtEnd()?"EOF":tokens[tokenno].text, toks );
-		DieAtToken( diemsg );
-	}
-}
+	// Inlining, start with global scope
+	Inline(0);
 
-char * Peek( )
-{
-	if( IsAtEnd() )
+	// Jump location linking
+	for (int i = 0; i < linked.Length; i += 2)
 	{
-		return 0;
-	}
-	else
-	{
-		return tokens[tokenno].text;
-	}
-}
+		if (linked[i] == null) break;
 
-char * PeekNext( )
-{
-	if( tokenno + 1 < numtoks )
-	{
-		return tokens[tokenno + 1].text;
+		if (linked[i] == "JUMP" || linked[i] == "CONDJUMP")
+		{
+			string label = (string)linked[i+1];
+			for (int j = 0; j < labels.Length; j += 2)
+			{
+				if (labels[j] == label)
+				{
+					linked[i+1] = (float)labels[j+1];
+				}
+			}
+		}
 	}
-	else
-	{
-		return 0;
-	}
-}
 
-char * EatIdent()
-{
-	if( GetType() != TOK_ALPHA )
+	// Register allocation
+	bool[] alloced = new bool[linked.Length];
+	int regAlloc = 0;
+	for (int i = 0; i < linked.Length; i += 2)
 	{
-		DieAtToken( "Expected function call identifier" );
-	}
-	return Advance();
-}
-	
-char * Advance( )
-{
-	char * ret = Peek();
-	tokenno++;
-	return ret;
-}
+		if (linked[i] == null) break;
 
-int IsAtEnd()
-{
-	return tokenno >= numtoks;
-}
+		if (linked[i] == "PUSHVAR" || linked[i] == "SETVAR")
+		{
+			if (alloced[i]) // don't allocate registers multiple times
+				continue;
 
-enum toktypes GetType()
-{
-	return GetTypeTo( 0 );
-}
+			string reg = (regAlloc++).ToString();
+			string[] a = linked[i+1].ToString().Split('.');
 
-void DieAtToken( const char * errmsg )
-{
-	if( IsAtEnd() )
-	{
-		fprintf( stderr, "Error: %s: %s\n", errmsg, filename );
+			for (int j = 0; j < linked.Length; j += 2)
+			{
+				if (linked[j] == null) break;
+
+				string[] b = linked[j+1].ToString().Split('.');
+
+				if ((linked[j] == "PUSHVAR" || linked[j] == "SETVAR") && a[0] == b[0])
+				{
+					if (b.Length > 1) // handle swizzle
+					{
+						linked[j+1] = reg + "." + b[1];
+					}
+					else
+					{
+						linked[j+1] = reg;
+					}
+					alloced[j] = true;
+				}
+			}
+		}
 	}
-	else
-	{
-		fprintf( stderr, "Error: %s (%s)(%d) at %s:%d:%d\n", errmsg, tokens[tokenno].text, tokens[tokenno].type, filename, tokens[tokenno].lineno, tokens[tokenno].charno );
-	}
-	exit( 0 );
+	*/
 }
 
 

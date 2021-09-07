@@ -20,8 +20,10 @@ FuncCall
 FuncDef
 GetType
 GetTypeTo
+Inline
 IsAssignment
 IsAtEnd
+Link
 Match
 MatchNext
 MatchTo
@@ -38,6 +40,7 @@ _end
 _etext
 _runmain
 _start
+compiled
 currentFunc
 currentParsed
 f
@@ -47,10 +50,13 @@ funcParams
 known_symbols
 labelCount
 last_crash_text
+linked
 main
 mycb
 numFuncs
+num_compiled_symbols
 num_known_symbols
+num_linked_symbols
 numtoks
 prevParsed
 tcccrash_install
