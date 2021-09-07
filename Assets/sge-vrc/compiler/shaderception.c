@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <stdarg.h>
 
 #define TCC_CRASH_IMPLEMENTATION
 #include "cncrashhandler_mini.h"
@@ -94,8 +95,8 @@ int numFuncs;
 char ** funcIdents;
 char *** funcParams;
 int currentFunc;
-int currentParsed;
-int prevParsed;
+int currentCompiled;
+int prevCompiled;
 
 
 
@@ -224,7 +225,7 @@ int IsAtEnd()
 	return tokenno >= numtoks;
 }
 
-enum toktypes GetType()
+enum tokentype GetType()
 {
 	return GetTypeTo( 0 );
 }
@@ -257,15 +258,15 @@ void SwitchToFunction( char * ident, char ** parameters, int numpar )
 
 	if( currentFunc == 0)
 	{
-		prevParsed = currentParsed;
+		prevCompiled = currentCompiled;
 	}
 	currentFunc = func;
-	currentParsed = 0;
+	currentCompiled = 0;
 }
 
 void SwitchToGlobal()
 {
-	currentParsed = prevParsed;
+	currentCompiled = prevCompiled;
 	currentFunc = 0;
 }
 
@@ -352,11 +353,10 @@ void ForLoop()
 
 void FuncDef()
 {
-	char ** parameters;
+	char ** parameters = 0;
 	Eat( "fun" );
 	char * ident = EatIdent();
 	Eat( "(" );
-printf( "1" );
 	int arity = 0;
 	if( GetType() == TOK_ALPHA ) // has parameters
 	{
@@ -371,25 +371,20 @@ printf( "1" );
 
 	Eat( ")" );
 	Eat( "{" );
-printf( "2" );
 
 	// emit body into correct store
 	SwitchToFunction( ident, parameters, arity );
-printf( "3" );
 
 	// pop parameters from stack in reverse order and put in registers
 	for (int i = 0; i < arity; i++)
 	{
 		Emit( "SETVAR %s", parameters[arity-1-i]);
 	}
-printf( "4" );
 
 	// body
 	Block();
-printf( "5" );
 	// restore global store
 	SwitchToGlobal();
-printf( "6" );
 
 	Eat("}");
 }
@@ -514,7 +509,6 @@ void Assignment()
 
 int Statement()
 {
-	printf( "STATEMENT %s\n", Peek() );
 	if( Match( "set" ) || Match( "let" ) )
 	{
 		Assignment();
@@ -686,13 +680,10 @@ void Term()
 
 void Block()
 {
-	printf( "\n" );
 	// A block is a list of Statements.
 	// Each statement is a line of the block.
 	// A statmenet does not produce a value.
 	while (!IsAtEnd() && !Statement());
-	printf( "---" );
-
 
 	// optional return statement
 	int hasReturn = Match("return");
@@ -711,26 +702,24 @@ void Block()
 
 void Inline()
 {
-/*	
+/*
 	char ** compiled;
-int num_compiled_symbols;
-char ** linked;
-int num_linked_symbols;
+	int num_compiled_symbols;
+	char ** linked;
+	int num_linked_symbols;
 
-
-
-	for (int i = 0; i < parsed[id].Length; i += 2)
+	for( int i = 0; i < compiled[id].Length; i += 2 )
 	{
-		if (parsed[id][i] == null) break;
+		if( compiled[id][i] == null) break;
 
 		// User function, inline
-		if (parsed[id][i] == "CALL" && FuncIdentToIndex((string)parsed[id][i+1]) == 0)
+		if (compiled[id][i] == "CALL" && FuncIdentToIndex((string)compiled[id][i+1]) == 0)
 		{
 			for (int j = 0; j < funcIdents.Length; j++) // find body of function to inline
 			{
 				if (funcIdents[j] == null) break;
 
-				if (funcIdents[j].Equals(parsed[id][i+1]))
+				if (funcIdents[j].Equals(compiled[id][i+1]))
 				{
 					// store previous renaming table
 					string[] prevRenameFrom = null;
@@ -761,31 +750,31 @@ int num_linked_symbols;
 		else
 		{
 			// Rename variables if a mapping table is available
-			if (parsed[id][i] == "PUSHVAR" || parsed[id][i] == "SETVAR")
+			if (compiled[id][i] == "PUSHVAR" || compiled[id][i] == "SETVAR")
 			{
-				string ident = (string)parsed[id][i+1];
+				string ident = (string)compiled[id][i+1];
 				if (renameFrom != null)
 				{
 					for (int j = 0; j < renameFrom.Length; j++)
 					{
 						if (ident == renameFrom[j])
 						{
-							parsed[id][i+1] = renameTo[j];
+							compiled[id][i+1] = renameTo[j];
 							break;
 						}
 					}
 				}
 			}
 			// Dont add labels
-			if (parsed[id][i] == "LABEL")
+			if (compiled[id][i] == "LABEL")
 			{
-				labels[currentLabels++] = parsed[id][i+1];
+				labels[currentLabels++] = compiled[id][i+1];
 				labels[currentLabels++] = currentLinked;
 			}
 			else
 			{
-				linked[currentLinked++] = parsed[id][i];
-				linked[currentLinked++] = parsed[id][i+1];
+				linked[currentLinked++] = compiled[id][i];
+				linked[currentLinked++] = compiled[id][i+1];
 			}
 		}
 	}
@@ -879,7 +868,8 @@ int main( int argc, char ** argv )
 		int currenttokenype = 1;
 		int tokpl = 0;
 
-		tokens = malloc( (tokenno+1) * sizeof( struct tokes ) );
+		tokens = malloc( sizeof( struct tokes ) );
+		tokens[0].text = 0;
 
 		while( ( c = fgetc( f ) ) != EOF )
 		{
@@ -890,7 +880,7 @@ int main( int argc, char ** argv )
 			}
 			charno++;
 			if( c == '\n' ) { lineno++; charno = 0; }
-			tokens[tokenno].text = realloc( tokens[tokenno].text, tokpl+2 );
+			tokens[tokenno].text = realloc( tokens[tokenno].text, tokpl+1 );
 			tokens[tokenno].text[tokpl++] = c;
 			tokens[tokenno].text[tokpl] = 0;
 
@@ -903,7 +893,7 @@ int main( int argc, char ** argv )
 					tokenno++;
 				tokens = realloc( tokens, (tokenno+1) * sizeof( struct tokes ) );
 				tokpl = 1;
-				tokens[tokenno].text = malloc( tokpl + 2 );
+				tokens[tokenno].text = malloc( tokpl + 1 );
 				tokens[tokenno].text[0] = c;
 				tokens[tokenno].text[1] = 0;
 				tokens[tokenno].lineno = lineno;
