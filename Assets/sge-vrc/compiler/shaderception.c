@@ -7,6 +7,37 @@
 #define TCC_CRASH_IMPLEMENTATION
 #include "cncrashhandler_mini.h"
 
+
+const char * filename;
+struct tokes
+{
+	char * text;
+	int lineno;
+	int charno;
+	int type;
+} * tokens;
+int tokenno;
+int numtoks;
+int labelCount = 0;
+
+FILE * f;
+
+// Per-function.
+char ** compiled;
+int * num_compiled_symbols;
+
+char ** linked;
+int num_linked_symbols;
+
+
+int numFuncs; // User functions
+char ** funcIdents;
+char *** funcParams;
+int currentFunc;
+int currentCompiled;
+int prevCompiled;
+
+
 // 1 = whitespace
 // 2 = numeric
 // 3 = alpha
@@ -25,6 +56,140 @@ const uint8_t toktypes[128] = {
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,13, 0,14, 0, 0,
 };
 
+// XXX TODO: Once settled, put this in alphabetical order.
+struct FuncToIndexMapping
+{
+	const char * name;
+	int index; //Included to allow sparse or order change.
+	int arity;
+} func_to_index[] = {
+	{ "log",	1,	1},
+	{ "log2",	2,	1},
+	{ "sin",	3,	1},
+	{ "cos",	4,	1},
+	{ "tan",	5,	1},
+	{ "asin",	6,	1},
+	{ "acos",	7,	1},
+	{ "atan",	8,	1},
+	{ "pow",	9,	2},
+	{ "exp",	10,	1},
+	{ "exp2",	11,	1},
+	{ "sqrt",	12,	1},
+	{ "rsqrt",	13,	1},
+	{ "abs",	14,	1},
+	{ "sign",	15,	1},
+	{ "floor",	16,	1},
+	{ "ceil",	17,	1},
+	{ "frac",	18,	1},
+	{ "mod",	19,	2},
+	{ "min",	20,	2},
+	{ "max",	21,	2},
+	{ "clamp",	22,	3},
+	{ "lerp",	23,	3},
+	{ "step",	24,	2},
+	{ "smoothstep",	25,	3},
+	{ "float2",	26,	2},
+	{ "float3",	27,	3},
+	{ "float4",	28,	4},
+	{ "swizzle",	29,	2},
+	{ "uv",	30,	0},
+	{ "xy",	31,	0},
+	{ "time",	32,	0},
+	{ "round",	33,	0},
+	{ "dot",	34,	2},
+	{ "cross",	35,	2},
+	{ "distance",	36,	2},
+	{ "normalize",	37,	1},
+	{ "length",	38,	1},
+	{ "reflect",	39,	2},
+	{ "refract",	40,	3},
+	{ "self",	41,	1},
+	{ "resolution",	42,	0},
+	{ "button",	43,	0},
+	{ "axis",	44,	0},
+	{ "camera",	45,	1},
+	{ "deltatime",	46,	0},
+	{ "video",	47,	1},
+	{ "all",	48,	1},
+	{ "any",	49,	1},
+};
+
+struct FuncToIndexMapping * FuncToProperties( const char * name )
+{
+	int i;
+	for( i = 0; i < sizeof( func_to_index ) / sizeof( func_to_index[0] ); i++)
+	{
+		struct FuncToIndexMapping * mapping = &func_to_index[i];
+		if( strcmp( mapping->name ) == 0 )
+			return mapping;
+	}
+	return 0;
+}
+
+int FuncIdentToIndex( const char * name )
+{
+	struct FuncToIndexMapping * mapping = FuncToProperties( name );
+	if( mapping )
+		return mapping->index;
+	else
+		return 0;
+}
+
+int GetFuncArity( const char * name )
+{
+	struct FuncToIndexMapping * mapping = FuncToProperties( name );
+	if( mapping )
+		return mapping->arity;
+
+	int i;
+	for( i = 0; i < numFuncs; i++ )
+	{
+		if( strcmp( funcIdents[i], name ) == 0 )
+		{
+			char * tx;
+			int arity = 0;
+			for( tx = funcParams[i]; *tx; tx++ )
+				arity++;
+			return arity;
+		}
+	}
+	
+	return -1;
+}
+
+struct BinOpToIndexMapping
+{
+	const char * op;
+	int index;
+} binop_to_index[] = {
+	{ "+", 1 },
+	{ "-", 2 },
+	{ "*", 3 },
+	{ "/", 4 },
+	{ "<", 5 },
+	{ ">", 6 },
+	{ "==", 7 },
+	{ "<=", 8 },
+	{ ">=", 9 },
+	{ "!=", 10 },
+	{ "&&", 11 },
+	{ "||", 12 },			
+};
+
+
+int BinOpToIndex( const char * op )
+{
+	int i;
+	for( i = 0; i < sizeof( binop_to_index ) / sizeof( binop_to_index[0] ); i++ )
+	{
+		struct BinOpToIndexMapping * mapping = &binop_to_index[i];
+		if( strcmp( mapping->name, op ) == 0 )
+			return mapping->index;
+	}
+	return 0;
+}
+
+
 enum tokentype
 {
 	TOK_INVALID = 0,
@@ -36,25 +201,6 @@ enum tokentype
 	TOK_EQALS,
 };
 
-
-const char * filename;
-struct tokes
-{
-	char * text;
-	int lineno;
-	int charno;
-	int type;
-} * tokens;
-int tokenno;
-int numtoks;
-int labelCount = 0;
-
-FILE * f;
-
-char ** compiled;
-int num_compiled_symbols;
-char ** linked;
-int num_linked_symbols;
 
 
 void Emit( const char * command, ... );
@@ -90,13 +236,6 @@ void FuncCall();
 void Link();
 void Inline();
 
-
-int numFuncs;
-char ** funcIdents;
-char *** funcParams;
-int currentFunc;
-int currentCompiled;
-int prevCompiled;
 
 
 
@@ -246,8 +385,6 @@ void DieAtToken( const char * errmsg )
 
 ////////////// FUNCTION SWITCHING /////////////////
 
-
-
 void SwitchToFunction( char * ident, char ** parameters, int numpar )
 {
 	int func = numFuncs++;
@@ -278,8 +415,13 @@ void Emit( const char * command, ... )
 	va_start( argp, command );
 	vprintf( command, argp );
 	putchar( '\n' );
+	if( currentFunc > 
 	compiled = realloc( compiled, sizeof(char*)*(num_compiled_symbols+1) );
 	compiled[num_compiled_symbols++] = strdup( command );
+
+
+        parsed[currentFunc][currentParsed++] = instr;
+        parsed[currentFunc][currentParsed++] = op;
 }
 
 
@@ -448,7 +590,7 @@ void Conditional( int endlabel )
 
 void Assignment()
 {
-	if (Match("let") || Match("set"))
+	if( Match( "let" ) || Match( "set" ) )
 	{
 		Advance();
 	}
@@ -462,7 +604,7 @@ void Assignment()
 	char * swizzle = 0;
 	char * identFirst = ident;
 
-	if ( Match( "." ) ) // handle swizzle
+	if( Match( "." ) ) // handle swizzle
 	{
 		Eat( "." );
 		if( GetType() != TOK_ALPHA )
@@ -472,12 +614,12 @@ void Assignment()
 		swizzle = Advance();
 	}
 	
-	if ( Match( "=") ) // normal assignment
+	if( Match( "=") ) // normal assignment
 	{
 		Eat( "=" );
 		Expression();
 	}
-	else if ( MatchNext("=") && (Match("+") || Match("-") || Match("*") || Match("/"))) // math assignment
+	else if( MatchNext( "=" ) && ( Match( "+" ) || Match( "-" ) || Match( "*" ) || Match( "/" ))) // math assignment
 	{
 		Emit("PUSHVAR %s", identFirst);
 
@@ -700,7 +842,7 @@ void Block()
 ////////// LINKING //////////////////
 
 
-void Inline()
+void Inline( int id )
 {
 /*
 	char ** compiled;
