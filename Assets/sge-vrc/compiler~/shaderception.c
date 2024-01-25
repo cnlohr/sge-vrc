@@ -23,11 +23,11 @@ int labelCount = 0;
 FILE * f;
 
 // Per-function.
-char ** compiled;
-int * num_compiled_symbols;
+//char ** compiled;
+//int * num_compiled_symbols;
 
-char ** linked;
-int num_linked_symbols;
+//char ** linked;
+//int num_linked_symbols;
 
 
 int numFuncs; // User functions
@@ -120,7 +120,7 @@ struct FuncToIndexMapping * FuncToProperties( const char * name )
 	for( i = 0; i < sizeof( func_to_index ) / sizeof( func_to_index[0] ); i++)
 	{
 		struct FuncToIndexMapping * mapping = &func_to_index[i];
-		if( strcmp( mapping->name ) == 0 )
+		if( strcmp( mapping->name, name ) == 0 )
 			return mapping;
 	}
 	return 0;
@@ -146,7 +146,7 @@ int GetFuncArity( const char * name )
 	{
 		if( strcmp( funcIdents[i], name ) == 0 )
 		{
-			char * tx;
+			char ** tx;
 			int arity = 0;
 			for( tx = funcParams[i]; *tx; tx++ )
 				arity++;
@@ -183,7 +183,7 @@ int BinOpToIndex( const char * op )
 	for( i = 0; i < sizeof( binop_to_index ) / sizeof( binop_to_index[0] ); i++ )
 	{
 		struct BinOpToIndexMapping * mapping = &binop_to_index[i];
-		if( strcmp( mapping->name, op ) == 0 )
+		if( strcmp( mapping->op, op ) == 0 )
 			return mapping->index;
 	}
 	return 0;
@@ -199,11 +199,60 @@ enum tokentype
 	TOK_OP,
 	TOK_SEMI,
 	TOK_EQALS,
+	TOK_RES_7,
+	TOK_RES_8,
+	TOK_RES_9,
+	TOK_OPEN_PARAM,
+	TOK_CLOSE_PARAM,
+	TOK_COMMA,
+	TOK_OPEN_CURL,
+	TOK_CLOSE_CURL,
+	TOK_RES_15,
+	TOK_RES_16,
+	TOK_RES_17,
+	TOK_RES_18,
+	TOK_RES_19,
+	TOK_RES_20,
+	TOK_RES_TIMS,
+	TOK_RES_PLUS,
 };
 
+enum CompToken
+{
+	CT_FUNCTION,
+	CT_VARLABEL,
+	CT_SETVAR,
+	CT_PUSHVAR,
+	CT_PUSHCONST,
+	CT_JUMP,
+	CT_LABEL,
+	CT_CONDJUMP,
+	CT_CALL,
+};
 
+const char * CompTokenNames[] = {
+	"FUNCTION",
+	"VARLABEL",
+	"SETVAR",
+	"PUSHVAR", 
+	"PUSHCONST",
+	"JUMP",
+	"LABEL",
+	"CONDJUMP",
+	"CALL",
+};
 
-void Emit( const char * command, ... );
+struct CompiledToken
+{
+	enum CompToken token;
+	const char * tokenparam;
+	int line;
+	int lcpos;
+};
+
+void EmitS( enum CompToken tok, char * fieldout );
+void EmitF( enum CompToken tok, float fieldf );
+
 char * Peek( );
 char * PeekNext( );
 char * Advance( );
@@ -407,7 +456,31 @@ void SwitchToGlobal()
 	currentFunc = 0;
 }
 
+/*
 ///////////////////////// COMPILATION ////////////////////////////
+
+struct CompiledToken
+{
+	enum CompToken token;
+	const char * tokenparam;
+	int line;
+	int lcpos;
+};
+*/
+Pick up here.
+
+
+void EmitS( enum CompToken tok, char * fieldout )
+{
+	printf( "%s %s\n", CompTokenNames[tok], fieldout );
+	//	tokens[tokenno].lineno
+
+}
+
+void EmitF( enum CompToken tok, float fieldf );
+{
+	printf( "%s %f\n", CompTokenNames[tok], fieldf );
+}
 
 void Emit( const char * command, ... )
 {
@@ -415,6 +488,9 @@ void Emit( const char * command, ... )
 	va_start( argp, command );
 	vprintf( command, argp );
 	putchar( '\n' );
+
+
+/*
 	if( currentFunc > 
 	compiled = realloc( compiled, sizeof(char*)*(num_compiled_symbols+1) );
 	compiled[num_compiled_symbols++] = strdup( command );
@@ -422,6 +498,7 @@ void Emit( const char * command, ... )
 
         parsed[currentFunc][currentParsed++] = instr;
         parsed[currentFunc][currentParsed++] = op;
+*/
 }
 
 
@@ -498,6 +575,7 @@ void FuncDef()
 	char ** parameters = 0;
 	Eat( "fun" );
 	char * ident = EatIdent();
+	Emit( "FUNCTION %s", ident );
 	Eat( "(" );
 	int arity = 0;
 	if( GetType() == TOK_ALPHA ) // has parameters
@@ -520,7 +598,7 @@ void FuncDef()
 	// pop parameters from stack in reverse order and put in registers
 	for (int i = 0; i < arity; i++)
 	{
-		Emit( "SETVAR %s", parameters[arity-1-i]);
+		Emit( "VARLABEL %s", parameters[arity-1-i]);
 	}
 
 	// body
@@ -529,6 +607,7 @@ void FuncDef()
 	SwitchToGlobal();
 
 	Eat("}");
+	Emit( "FUNCEND" );
 }
 
 void FuncCall()
@@ -775,7 +854,8 @@ void Term()
 	}
 	else if( GetType() == TOK_NUMERIC ) //Number
 	{
-		Emit( "PUSHCONST (%f, %f, %f, %f)", atof( Advance() ), NAN, NAN, NAN );
+		const char * adv = Advance();
+		Emit( "PUSHCONST %f", atof( adv ) );
 	}
 	else if( Match( "(" ) )
 	{
@@ -815,7 +895,7 @@ void Term()
 			}
 		}
 
-		Emit( "PUSHCONST (%f, %f, %f, %f)", res[0], res[1], res[2], res[3] );
+		Emit( "PUSHCONST %f", res[0] + res[1] * 16 + res[2] * 256 + res[3] * 1024 );
 		Emit( "CALL swizzle");
 	}
 }
@@ -835,93 +915,14 @@ void Block()
 	// optional semicolon for return
 	if (hasReturn) Eat( ";" );
 
+	// Get rid of any extra whitespace.
+	if (GetTypeTo(0) == TOK_WHITE) Advance();
+
 	if (!IsAtEnd() && !Match("}")) DieAtToken("End of block reached, but there is more code.");
 }
 
 
 ////////// LINKING //////////////////
-
-
-void Inline( int id )
-{
-/*
-	char ** compiled;
-	int num_compiled_symbols;
-	char ** linked;
-	int num_linked_symbols;
-
-	for( int i = 0; i < compiled[id].Length; i += 2 )
-	{
-		if( compiled[id][i] == null) break;
-
-		// User function, inline
-		if (compiled[id][i] == "CALL" && FuncIdentToIndex((string)compiled[id][i+1]) == 0)
-		{
-			for (int j = 0; j < funcIdents.Length; j++) // find body of function to inline
-			{
-				if (funcIdents[j] == null) break;
-
-				if (funcIdents[j].Equals(compiled[id][i+1]))
-				{
-					// store previous renaming table
-					string[] prevRenameFrom = null;
-					if (renameFrom != null)
-					{
-						prevRenameFrom = new string[renameFrom.Length];
-						System.Array.Copy(renameFrom, prevRenameFrom, renameFrom.Length);
-					}
-
-					// setup renaming table
-					renameFrom = funcParams[j];
-					renameTo = new string[renameFrom.Length];
-					for (int k = 0; k < renameTo.Length; k++)
-					{
-						if (renameFrom[k] == null) break;
-						renameTo[k] = "_reg" + regCount++;
-					}
-
-					// recursively inline function
-					Inline(j);
-
-					// restore renaming table
-					renameFrom = prevRenameFrom;
-					break;
-				}
-			}
-		}
-		else
-		{
-			// Rename variables if a mapping table is available
-			if (compiled[id][i] == "PUSHVAR" || compiled[id][i] == "SETVAR")
-			{
-				string ident = (string)compiled[id][i+1];
-				if (renameFrom != null)
-				{
-					for (int j = 0; j < renameFrom.Length; j++)
-					{
-						if (ident == renameFrom[j])
-						{
-							compiled[id][i+1] = renameTo[j];
-							break;
-						}
-					}
-				}
-			}
-			// Dont add labels
-			if (compiled[id][i] == "LABEL")
-			{
-				labels[currentLabels++] = compiled[id][i+1];
-				labels[currentLabels++] = currentLinked;
-			}
-			else
-			{
-				linked[currentLinked++] = compiled[id][i];
-				linked[currentLinked++] = compiled[id][i+1];
-			}
-		}
-	}
-	*/
-}
 
 void Link()
 {
